@@ -29,7 +29,7 @@ from tqdm import tqdm
 import yfinance as yf
 
 # Optional: better rate-limit resistance (pip install curl_cffi)
-# from curl_cffi import requests
+# from curl_cffi import requests 
 # session = requests.Session(impersonate="chrome124")
 # Then pass session=session to yf.download(...)
 
@@ -54,7 +54,7 @@ SUB_BATCH_SIZE = 100                    # Tickers per yf.download() call — saf
 
 # Default range if no command-line args provided
 DEFAULT_BATCH_START = 1
-DEFAULT_BATCH_END   = 5                 # Change these as fallback
+DEFAULT_BATCH_END   = 17                 # Change these as fallback
 
 
 def get_batch_range():
@@ -186,7 +186,7 @@ def main():
 
         # Delay between different batch files
         if batch_num < end_batch:
-            time.sleep(3 + random.uniform(0, 4))  # 3–7 sec between batch files
+            time.sleep(5 + random.uniform(0, 5))  # 5–10 sec between batch files
 
     print("\n" + "="*80)
     print("All requested batches finished")

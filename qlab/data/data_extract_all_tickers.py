@@ -25,13 +25,14 @@ def clean_ticker(t: str) -> str | None:
 
 def extract_all_unique_tickers():
     nasdaq_path = Path("qlab/data/nasdaq_stock_list.csv")
-    nyse_etf_path = Path("qlab/data/nyse_etf_only_stock_list.csv")
+    nyse_path = Path("qlab/data/nyse_regular_stocks.csv")
+
 
     tickers = set()
 
-    for path in [nasdaq_path, nyse_etf_path]:
+    for path in [nasdaq_path, nyse_path]:
         if not path.exists():
-            print(f"Missing file: {path}")
+            print(f"Missing  file: {path}")
             continue
 
         try:

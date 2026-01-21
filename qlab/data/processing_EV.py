@@ -22,27 +22,25 @@ from tqdm import tqdm
 
 # ── Configuration ───────────────────────────────────────────────────────────
 DATA_DIR             = Path("data/yfinance/1m")
+BASE_DIR             = Path("data/yfinance/batches")
 MIN_THRESHOLD        = 60                                # % up bars threshold to include
 HIGH_THRESHOLD       = 80                                # "strong"
 MED_THRESHOLD        = 70                                # "good"
 MAX_SYMBOLS          = 7000                              # safety limit
 SAVE_INTERMEDIATE_CSV = True
 CSV_OUTPUT_SUFFIX    = "strong_stocks"
-HEATMAP_MAX_TICKERS  = 120                               # max rows in overall heatmap
+HEATMAP_MAX_TICKERS  = 200                               # max rows in overall heatmap
 TOP_PER_GROUP        = 15                                # max stocks shown per group
 
-# Volume filter for scalping (adjust as needed)
-MIN_DAILY_VOLUME     = 5_000_000                         # 5M shares — good for 5–10 trades/hour
+MIN_DAILY_VOLUME     = 5_000_000                         # 5M shares
 
-# Custom date override (set to None for previous trading day)
-# Format: "YYYY-MM-DD" string, e.g. "2026-01-15"
-TARGET_DATE          = "2026-01-12"
+TARGET_DATE          = "2026-01-12"                      # or None for previous trading day
 
-# Controls which heatmaps to save
-HEATMAP_SAVE_MODE    = "overall_only"                    # Options: "all", "overall_only", "groups_only", "none"
+DEBUG_BARS           = True                              # Set False to quiet output
 
-# Base folder for heatmaps
-HEATMAP_OUTPUT_DIR   = Path("heatmaps")                  # ← change this to your preferred base folder
+HEATMAP_SAVE_MODE    = "overall_only"                    # "all", "overall_only", "groups_only", "none"
+
+HEATMAP_OUTPUT_DIR   = Path("heatmaps")
 
 INTERVALS = ['1min', '2min', '3min', '5min', '7min', '15min', '30min', '60min', '120min', '240min']
 INTERVAL_LABELS = ['1min', '2min', '3min', '5min', '7min', '15min', '30min', '1h', '2h', '4h']
@@ -66,11 +64,10 @@ def get_trading_day(target_date_str: str | None = None):
                 print(f"Using specified trading day: {target.date()}")
                 return target.date()
             else:
-                print(f"Warning: {target_date_str} is not a trading day. Falling back to previous valid day.")
+                print(f"Warning: {target_date_str} is not a trading day. Falling back...")
         except Exception as e:
-            print(f"Invalid date format '{target_date_str}': {e}. Falling back to previous trading day.")
+            print(f"Invalid date '{target_date_str}': {e}. Falling back...")
 
-    # Fallback: previous trading day
     schedule = nyse.schedule(start_date=today - timedelta(days=40), end_date=today)
     if len(schedule) < 2:
         return None
@@ -80,41 +77,66 @@ def get_trading_day(target_date_str: str | None = None):
 def load_ticker_1min(ticker: str) -> pd.DataFrame | None:
     path = DATA_DIR / f"{ticker.upper()}.parquet"
     if not path.exists():
+        if DEBUG_BARS:
+            print(f"{ticker}: no parquet file at {path}")
         return None
     try:
         df = pd.read_parquet(path)
         if not isinstance(df.index, pd.DatetimeIndex):
             if 'index' in df.columns:
                 df = df.set_index('index')
-            else:
-                df.index = pd.to_datetime(df.index)
+            df.index = pd.to_datetime(df.index)
         if df.index.tz is None:
             df.index = df.index.tz_localize('UTC')
         else:
             df.index = df.index.tz_convert('UTC')
+        df = df.sort_index()
+        if DEBUG_BARS:
+            print(f"{ticker}: loaded {len(df)} total rows | date range {df.index.min().date()} → {df.index.max().date()}")
         return df
     except Exception as e:
-        print(f"Error loading {ticker}: {e}")
+        print(f"{ticker}: load error {e}")
         return None
 
 
-def analyze_day(df_1min: pd.DataFrame, target_date: datetime.date) -> dict | None:
+def analyze_day(ticker: str, df_1min: pd.DataFrame, target_date: datetime.date) -> dict | None:
+    """Filter to ALL bars on the target date (full day, including extended hours), resample, compute % up bars."""
     if df_1min is None or df_1min.empty:
+        if DEBUG_BARS:
+            print(f"{ticker}: skipped - no data loaded or empty")
         return None
 
+    # Convert to New York time for consistent date slicing
     df_et = df_1min.tz_convert('America/New_York')
-    start = pd.Timestamp(f"{target_date} {MARKET_OPEN}", tz='America/New_York')
-    end   = pd.Timestamp(f"{target_date} {MARKET_CLOSE}", tz='America/New_York')
 
-    df_day = df_et.loc[start:end]
+    # Slice ALL bars on the target date (no time-of-day filter)
+    target_date_str = target_date.strftime('%Y-%m-%d')
+    df_day = df_et[df_et.index.date == target_date]
+
+    if DEBUG_BARS:
+        print(f"{ticker} - total rows on {target_date}: {len(df_day)}")
+        if not df_day.empty:
+            print(f"  First bar: {df_day.index.min()}")
+            print(f"  Last bar:  {df_day.index.max()}")
+
     if df_day.empty:
+        if DEBUG_BARS:
+            print(f"{ticker}: skipped - no rows on {target_date} at all")
         return None
 
-    # ── Volume filter for scalping suitability ──────────────────────────────
+    # Optional: still enforce a minimum number of bars (now much higher possible)
+    if len(df_day) < 300:  # keep this or raise to 1000 if you want only very active stocks
+        if DEBUG_BARS:
+            print(f"{ticker}: skipped - only {len(df_day)} total bars on date (need ≥300)")
+        return None
+
     daily_volume = df_day['Volume'].sum()
     if daily_volume < MIN_DAILY_VOLUME:
+        if DEBUG_BARS:
+            print(f"{ticker}: skipped - volume {daily_volume:,.0f} < {MIN_DAILY_VOLUME:,}")
         return None
 
+    # Resample and compute % up bars (now using full-day bars)
     results = {}
     for intv, label in zip(INTERVALS, INTERVAL_LABELS):
         resampled = df_day.resample(intv).agg({
@@ -127,6 +149,8 @@ def analyze_day(df_1min: pd.DataFrame, target_date: datetime.date) -> dict | Non
 
         if resampled.empty:
             results[label] = 0.0
+            if DEBUG_BARS:
+                print(f"{ticker} {label}: 0 bars (empty resample)")
             continue
 
         up_count = (resampled['Close'] > resampled['Open']).sum()
@@ -134,219 +158,114 @@ def analyze_day(df_1min: pd.DataFrame, target_date: datetime.date) -> dict | Non
         pct_up = (up_count / total) * 100 if total > 0 else 0.0
         results[label] = round(pct_up, 1)
 
-    return results
+        if DEBUG_BARS:
+            print(f"{ticker} {label}: {total} bars, {up_count} up → {pct_up:.1f}%")
 
+    return results
 
 def main():
     target_date = get_trading_day(TARGET_DATE)
     if not target_date:
-        print("Could not determine a valid trading day.")
+        print("No valid trading day found.")
         return
-
-    print(f"\nAnalyzing trading day: {target_date}\n")
-
-    parquet_files = list(DATA_DIR.glob("*.parquet"))
-    all_symbols = [f.stem.upper() for f in parquet_files][:MAX_SYMBOLS]
-
-    print(f"Found {len(parquet_files)} files → analyzing up to {len(all_symbols)} tickers\n")
-
-    all_results = {}
-    skipped = []
-
-    start_time = datetime.now()
-    with tqdm(total=len(all_symbols), desc="Processing tickers", unit="ticker",
-              dynamic_ncols=True, mininterval=1.0) as pbar:
-
-        for symbol in all_symbols:
-            df = load_ticker_1min(symbol)
+    date_str = target_date.strftime('%Y-%m-%d')
+    print(f"\nAnalyzing {date_str} (vol ≥{MIN_DAILY_VOLUME:,} | up bars ≥{MIN_THRESHOLD}%)\n")
+    if not BASE_DIR.exists():
+        print(f"Missing {BASE_DIR} — run data_extract_all_tickers.py first!")
+        return
+    ticker_files = sorted(BASE_DIR.glob("batch_*.txt"))
+    all_tickers = []
+    for file in ticker_files:
+        with open(file, encoding='utf-8') as f:
+            all_tickers.extend([t.strip().upper() for t in f if t.strip() and not t.startswith('#')])
+    all_tickers = sorted(set(all_tickers))[:MAX_SYMBOLS]
+    print(f"Loaded {len(all_tickers):,} tickers from {len(ticker_files)} batches")
+    results = {}
+    with tqdm(total=len(all_tickers), desc="Analyzing tickers") as pbar:
+        for ticker in all_tickers:
+            df = load_ticker_1min(ticker)
             if df is None:
-                skipped.append(symbol)
-                pbar.update(1)
+                pbar.update()
                 continue
-
-            day_stats = analyze_day(df, target_date)
-            if day_stats is None:
-                skipped.append(symbol)
-                pbar.update(1)
-                continue
-
-            all_results[symbol] = day_stats
-
-            elapsed = datetime.now() - start_time
-            processed = pbar.n + 1
-            rate = processed / elapsed.total_seconds() if elapsed.total_seconds() > 0 else 0.0
-            remaining = pbar.total - processed
-            eta_min = (remaining / rate / 60) if rate > 0 else "--"
-            pbar.set_postfix_str(
-                f"{symbol:8} | {rate:5.1f} t/s | ETA ~{eta_min} min",
-                refresh=True
-            )
-            pbar.update(1)
-
-    print(f"\nCompleted: {len(all_results)} analyzed, {len(skipped)} skipped\n")
-
-    if skipped:
-        print(f"Skipped (first 60): {', '.join(skipped[:60])}{'...' if len(skipped)>60 else ''}\n")
-
-    if not all_results:
+            result = analyze_day(ticker, df, target_date)
+            if result:
+                results[ticker] = result
+            pbar.update()
+    if not results:
         print("No usable data found.")
+        print("Check:")
+        print("  • Are parquets in data/yfinance/1m/ ?")
+        print("  • Do they contain data for the target date?")
+        print("  • Try TARGET_DATE = None or a recent date")
         return
-
-    # ── Build results DataFrame ─────────────────────────────────────────────
-    df_results = pd.DataFrame.from_dict(all_results, orient='index')
-    df_results = df_results[INTERVAL_LABELS]
-
-    # Filter: ≥ MIN_THRESHOLD on at least one timeframe
+    print(f"\n✓ Analyzed {len(results)} stocks with usable data\n")
+    df_results = pd.DataFrame.from_dict(results, orient='index')[INTERVAL_LABELS]
     good_mask = df_results.max(axis=1) >= MIN_THRESHOLD
     df_filtered = df_results[good_mask].copy()
-
     if df_filtered.empty:
-        print(f"No stocks reached ≥{MIN_THRESHOLD}% up bars on {target_date}.")
+        print(f"No stocks hit ≥{MIN_THRESHOLD}% up bars on {date_str}.")
         return
-
-    print(f"Found {len(df_filtered)} stocks with ≥{MIN_THRESHOLD}% up bars somewhere\n")
-
-    # Add summary columns
     df_filtered['Max_%'] = df_filtered.max(axis=1).round(1)
     df_filtered['Strong_count'] = (df_filtered >= HIGH_THRESHOLD).sum(axis=1)
-    df_filtered['Good_count']   = (df_filtered >= MED_THRESHOLD).sum(axis=1)
-
-    # Sort strongest first (global sort)
+    df_filtered['Good_count'] = (df_filtered >= MED_THRESHOLD).sum(axis=1)
     df_filtered = df_filtered.sort_values('Max_%', ascending=False)
-
-    # ── Save full filtered results early ────────────────────────────────────
     if SAVE_INTERMEDIATE_CSV:
-        csv_path = f"{CSV_OUTPUT_SUFFIX}_{target_date}.csv"
+        HEATMAP_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        csv_path = HEATMAP_OUTPUT_DIR / f"{CSV_OUTPUT_SUFFIX}_{date_str}.csv"
         save_df = df_filtered.copy()
         save_df.insert(0, 'Ticker', save_df.index)
         save_df.to_csv(csv_path, index=False)
-        print(f"Saved full filtered results → {csv_path} ({len(save_df)} rows)\n")
-
-    # ── Prepare date-specific output subfolder (only for group heatmaps) ─────
-    date_str = str(target_date)
+        print(f"✓ CSV saved: {csv_path} ({len(save_df)} rows)")
     output_subdir = HEATMAP_OUTPUT_DIR / date_str
     output_subdir.mkdir(parents=True, exist_ok=True)
-
-    # ── Terminal print with color (full table) ──────────────────────────────
-    print("═"*100)
-    print(f" Stocks with ≥{MIN_THRESHOLD}% up bars on at least one timeframe ".center(100, "═"))
-    print("═"*100)
-
-    def format_cell(x):
-        x = round(x, 1)
-        if x >= HIGH_THRESHOLD:
-            return f"\033[92m{x:.1f}\033[0m"   # green
-        elif x >= MED_THRESHOLD:
-            return f"\033[93m{x:.1f}\033[0m"   # yellow
-        else:
-            return f"{x:.1f}"
-
-    print_df = df_filtered.drop(columns=['Max_%', 'Strong_count', 'Good_count']).copy()
-    for col in print_df.columns:
-        print_df[col] = print_df[col].apply(format_cell)
-
-    print_df['Max_%'] = df_filtered['Max_%'].apply(lambda x: f"\033[1m{x:.1f}\033[0m")
-    print_df['Strong'] = df_filtered['Strong_count'].apply(lambda x: f"\033[92m{x}\033[0m" if x > 0 else x)
-    print_df['Good']   = df_filtered['Good_count'].apply(lambda x: f"\033[93m{x}\033[0m" if x > 0 else x)
-
-    print(print_df.to_string())
-    print("\nLegend: \033[92mgreen ≥80%\033[0m | \033[93myellow ≥70%\033[0m | bold = max %")
-    print(f"Total shown: {len(df_filtered)}\n")
-
-    # ── Group by best timeframe + top 15 + separate heatmaps ────────────────
-    best_tf = df_filtered.drop(columns=['Max_%','Strong_count','Good_count']).idxmax(axis=1)
-    grouped = df_filtered.groupby(best_tf)
-
-    print("═"*90)
-    print("Grouped by strongest timeframe (showing top 15 per group)".center(90, "═"))
-    print("═"*90)
-
+    print("\n" + "═"*80)
+    print(f"TOP STOCKS ≥{MIN_THRESHOLD}% UP BARS | {date_str}".center(80))
+    print("═"*80)
+    print(df_filtered.round(1))
+    # ── Group heatmaps ───────────────────────────────────────────────────────
     if HEATMAP_SAVE_MODE in ["all", "groups_only"]:
-        for tf, group in grouped:
-            if len(group) == 0:
-                continue
-
-            group_sorted = group.sort_values('Max_%', ascending=False)
-            display_group = group_sorted.head(TOP_PER_GROUP)
-
-            count_str = f"{len(group)} stocks" if len(group) <= TOP_PER_GROUP else f"{len(group)} stocks (top {TOP_PER_GROUP} shown)"
-            print(f"\nBest on {tf}: {count_str}")
+        best_tf = df_filtered.drop(columns=['Max_%','Strong_count','Good_count']).idxmax(axis=1)
+        for tf, group in df_filtered.groupby(best_tf):
+            if len(group) == 0: continue
+            display_group = group.sort_values('Max_%', ascending=False).head(TOP_PER_GROUP)
+            print(f"\nBest {tf}: {len(group)} stocks (top {TOP_PER_GROUP} shown)")
             print(display_group[['Max_%'] + INTERVAL_LABELS].round(1))
-            print("-" * 70)
-
-            # ── Create separate heatmap for this group (saved in day subfolder) ──
             heatmap_data = display_group.drop(columns=['Max_%', 'Strong_count', 'Good_count'])
-
             if not heatmap_data.empty:
-                fig_height = max(5, min(18, len(heatmap_data) * 0.45))
+                fig_height = max(5, min(18, len(heatmap_data)*0.45))  # (unchanged for groups, as they are small)
                 plt.figure(figsize=(14, fig_height))
-                sns.heatmap(
-                    heatmap_data,
-                    annot=True,
-                    fmt=".1f",
-                    cmap="YlGnBu",
-                    vmin=50, vmax=100,
-                    linewidths=0.4,
-                    annot_kws={"size": 10},
-                    cbar_kws={'label': '% Up Bars', 'shrink': 0.7}
-                )
-                plt.title(f"{tf} – Top performers {target_date}\n(filtered ≥{MIN_THRESHOLD}%)",
-                          fontsize=13, pad=12)
-                plt.ylabel("Ticker")
-                plt.xlabel("Timeframe")
-                plt.xticks(rotation=45, ha='right')
-                plt.yticks(rotation=0)
-                plt.tight_layout()
-
+                sns.heatmap(heatmap_data, annot=True, fmt=".1f", cmap="YlGnBu", vmin=50, vmax=100,
+                            linewidths=0.4, annot_kws={"size":10}, cbar_kws={'label': '% Up Bars'})
+                plt.title(f"{tf} Top {date_str} (≥{MIN_THRESHOLD}%)", fontsize=13, pad=12)
+                plt.ylabel("Ticker"); plt.xlabel("Timeframe")
+                plt.xticks(rotation=45, ha='right'); plt.tight_layout()
                 safe_tf = tf.replace(" ", "").replace(":", "")
                 heatmap_file = output_subdir / f"heatmap_{date_str}_{safe_tf}_top{len(heatmap_data)}.png"
-                plt.savefig(heatmap_file, dpi=140, bbox_inches='tight')
-                plt.close()
-                print(f"  → Group heatmap saved: {heatmap_file}")
-
-    print("\nGroup heatmaps completed." if HEATMAP_SAVE_MODE in ["all", "groups_only"] else "\nSkipping group heatmaps.")
-
-    # ── Overall top heatmap (saved directly in HEATMAP_OUTPUT_DIR, not in day folder) ──
+                plt.savefig(heatmap_file, dpi=140, bbox_inches='tight'); plt.close()
+                print(f"  → {heatmap_file}")
+    # ── Overall heatmap ──────────────────────────────────────────────────────
     if HEATMAP_SAVE_MODE in ["all", "overall_only"]:
         heatmap_data_all = df_filtered.drop(columns=['Max_%', 'Strong_count', 'Good_count'])
-
         if len(heatmap_data_all) > HEATMAP_MAX_TICKERS:
-            print(f"\nToo many tickers for overall heatmap ({len(heatmap_data_all)} > {HEATMAP_MAX_TICKERS}).")
-            print(f"Showing only top {HEATMAP_MAX_TICKERS} strongest performers.")
             max_vals = heatmap_data_all.max(axis=1)
-            heatmap_data_all = heatmap_data_all.loc[max_vals.sort_values(ascending=False).index].iloc[:HEATMAP_MAX_TICKERS]
-
+            heatmap_data_all = heatmap_data_all.loc[max_vals.nlargest(HEATMAP_MAX_TICKERS).index]
         if not heatmap_data_all.empty:
-            fig_height = max(6, min(24, len(heatmap_data_all) * 0.38))
-            plt.figure(figsize=(16, fig_height))
-            sns.heatmap(
-                heatmap_data_all,
-                annot=True,
-                fmt=".1f",
-                cmap="YlGnBu",
-                vmin=50, vmax=100,
-                linewidths=0.3,
-                annot_kws={"size": 9 if len(heatmap_data_all) > 60 else 10},
-                cbar_kws={'label': '% Up Bars', 'shrink': 0.75}
-            )
-            plt.title(f"Overall Top Intraday % Up Bars – {target_date}\n(top {len(heatmap_data_all)} shown)",
-                      fontsize=14, pad=16)
-            plt.ylabel("Ticker")
-            plt.xlabel("Timeframe")
-            plt.xticks(rotation=45, ha='right')
-            plt.yticks(rotation=0, fontsize=9 if len(heatmap_data_all) > 60 else 10)
-            plt.tight_layout()
-
-            # ── Save overall heatmap directly in base output dir (not day subfolder) ──
+            # NEW: Increase max height cap to 48 inches for taller plots (scale downward with more rows)
+            # Adjust the multiplier (0.38) down to 0.3 for denser rows if needed.
+            fig_height = max(6, min(48, len(heatmap_data_all) * 0.38))  # Increased cap from 24 to 48
+            # NEW: Wider figure for better label visibility with many columns
+            plt.figure(figsize=(18, fig_height))  # Increased width from 16 to 18
+            # NEW: Smaller annotation font for dense rows (adjust to 8 or 7 if >300 rows)
+            sns.heatmap(heatmap_data_all, annot=True, fmt=".1f", cmap="YlGnBu", vmin=50, vmax=100,
+                        linewidths=0.3, annot_kws={"size":8}, cbar_kws={'label': '% Up Bars'})
+            plt.title(f"Overall Top {date_str}\n(top {len(heatmap_data_all)})", fontsize=14, pad=16)
+            plt.ylabel("Ticker"); plt.xlabel("Timeframe")
+            plt.xticks(rotation=45, ha='right'); plt.tight_layout()
             overall_file = HEATMAP_OUTPUT_DIR / f"heatmap_{date_str}_overall_top{len(heatmap_data_all)}.png"
-            plt.savefig(overall_file, dpi=140, bbox_inches='tight')
-            plt.close()
-            print(f"\nOverall heatmap saved → {overall_file}")
-        else:
-            print("No data available for overall heatmap.")
-
-    else:
-        print("\nSkipping overall heatmap.")
+            # NEW: Higher DPI (200) for sharper large images; consider PDF for vector zoom if needed
+            plt.savefig(overall_file, dpi=200, bbox_inches='tight'); plt.close()
+            print(f"\n✓ Overall heatmap: {overall_file}")
+    print("\nDone!")
 
 
 if __name__ == "__main__":
