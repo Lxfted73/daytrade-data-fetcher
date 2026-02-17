@@ -17,7 +17,7 @@ INTERVALS = [
 ]
 
 # Where to save the DuckDB database file (optional - for persistence)
-DB_PATH = Path("qlab/data/qlab.duckdb")              # Will be created if it doesn't exist
+DB_PATH = Path(r"daytrade-data-fetcher\qlab\data\qlab.duckdb")              # Will be created if it doesn't exist
 
 # ── Helper: Clean symbol name from filename ────────────────────────────────────
 def clean_symbol(filename: str) -> str:

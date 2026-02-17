@@ -1,0 +1,5 @@
+https://github.com/asyminformant/all-stocks/blob/main/NYSE/structured_data/nyse_etfs.csv 
+
+https://www.nasdaq.com/market-activity/stocks/screener
+
+https://github.com/asyminformant/all-stocks/blob/main/NYSE/structured_data/nyse_regular_stocks.csv

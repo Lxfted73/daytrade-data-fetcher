@@ -24,8 +24,8 @@ def clean_ticker(t: str) -> str | None:
 
 
 def extract_all_unique_tickers():
-    nasdaq_path = Path("qlab/data/nasdaq_stock_list.csv")
-    nyse_path = Path("qlab/data/nyse_regular_stocks.csv")
+    nasdaq_path = Path(r"daytrade-data-fetcher\qlab\resources\nasdaq_stock_list.csv")
+    nyse_path = Path(r"daytrade-data-fetcher\qlab\resources\nyse_regular_stocks.csv")
 
 
     tickers = set()
