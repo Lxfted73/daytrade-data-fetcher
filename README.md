@@ -1,72 +1,27 @@
-# QLab – U.S. Equities Data Pipeline & Intraday Behavior Explorer
+# qlab-quant-research
 
-**Status (February 2026):**  
-Working end-to-end pipeline from ticker ingestion → daily + recent intraday data collection → DuckDB analytical layer → early intraday directional bias visualization (up-bar % heatmaps across timeframes)
+Personal research environment for systematic factor strategies and backtesting.
 
-QLab is a lightweight, modular research environment focused on **U.S. equities** with the following goals:
+## Current stage (Feb 2026)
+- Robust daily OHLCV data pipeline using yfinance (incremental fetch, batch processing)
+- Aggressive quality scanning & cleanup (zero-volume filtering, bad price removal, short-history junk)
+- Parquet-based storage + basic reporting
+- Preparing clean, filtered universe for backtesting
 
-- Collect and maintain clean OHLCV history (daily + short lookback intraday)
-- Enable fast DuckDB-based exploration and feature generation
-- Identify intraday patterns suitable for scalping/day-trading
-- Build toward a production-grade **factor / signal research & backtesting stack**
+## Next priorities
+1. Production-grade vectorized backtester (momentum/value baselines, slippage/costs, OOS splits)
+2. Feature library (technicals, simple combos, low-turnover variants)
+3. Regime detection & adaptive blending experiments
 
-Current emphasis:  
-robust daily backtesting foundation + quick univariate signal testing + intuition-building around intraday bar directionality
+## Tech stack
+- Python 3.11+ • pandas 2.x • polars • yfinance • pyarrow • tqdm
+- DuckDB (exploratory) • vectorbt / custom engine (planned)
+- Scripts + modular src/ layout (in progress)
 
-## Project Roadmap – Recommended Order (2026)
+## How to run (current pipeline)
+```bash
+# Quality scan + aggressive cleanup for daily data
+python scripts/quality_scan_and_cleanup.py 1d
 
-1. **Robust Backtesting & Single-Factor Validation** ← **active priority**  
-   Goal: trustworthy vectorized/event-driven backtest engine  
-   - realistic transaction costs (spread + commission + slippage)  
-   - proper out-of-sample evaluation  
-   - standard metrics: IC, IR, SR, turnover, Calmar, max drawdown, etc.  
-   → Quick wins: classic momentum (12-1), value (EP/BP), low-vol, quality
-
-2. **Feature Engineering & Signal Exploration**  
-   Goal: rapidly test dozens → hundreds of candidate alphas  
-   - technicals (momentum, mean-reversion, volatility, volume anomalies)  
-   - simple combinations / ratios  
-   - proxy signals from alternative data (when available)  
-   → Learn what actually looks "alpha-like": predictability, low turnover, persistence, cross-sectional rank stability
-
-3. **Regime-Adaptive Multi-Signal Blending**  
-   Goal: dynamic signal selection / weighting + final multi-factor portfolio  
-   - detect regimes (volatility, trend, liquidity, macro proxy, etc.)  
-   - combine 3–5 strongest alphas with regime-conditioned weights  
-   → Demonstrate edge that survives regime changes
-
-## Current Capabilities
-
-- **Ticker ingestion & batching**  
-  NASDAQ + NYSE lists → cleaned, deduplicated, sorted → split into ~400-ticker batches
-
-- **Data fetching (Yahoo Finance)**  
-  - Daily / weekly: full history or incremental append  
-  - Intraday (1m–240m): recent snapshot only (~7–8 day lookback limit)  
-  - Duplicate removal + timestamp conflict resolution (highest volume wins)  
-  - Gap / continuity warnings for daily+ data
-
-- **Storage layout**
-
-
-## Fodler Structure
-├── 01_pipeline_to_duckdb.py           # main orchestrator
-├── data/
-│   ├── yfinance/
-│   │   ├── 1m/ *.parquet
-│   │   ├── 1d/ *.parquet
-│   │   └── batches/ *.txt
-│   └── qlab/data/qlab.duckdb
-├── heatmaps/                          # generated PNG heatmaps
-├── qlab/
-│   └── resources/                     # source CSV ticker lists
-└── supporting scripts:
-    ├── data_batch_downloader.py
-    ├── data_duckdb.py
-    ├── data_fetcher.py
-    ├── data_standardize_parquets.py
-    ├── processing_EV_duckDB.py
-    ├── processing_EV.py               # pandas-only fallback version
-    └── ...
-
-    
+# Or for intraday (recent only)
+python scripts/quality_scan_and_cleanup.py 1m
