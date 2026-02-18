@@ -25,24 +25,33 @@ from datetime import datetime
 import time
 import importlib.util
 
+# 01_data_ingestion_pipeline.py
+# (put this near the top, after your imports)
+
+
+# ── Make qlab/ discoverable ──────────────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parents[1]          # go up 1 level from scripts/
+QLAB_DIR     = PROJECT_ROOT / "archive"                        # adjust if it's qlab/data → / "qlab" / "data"
+
+if str(QLAB_DIR) not in sys.path:
+    sys.path.insert(0, str(QLAB_DIR))
+
+print(f"Added to sys.path: {QLAB_DIR.resolve()}")           # helpful for debugging
+
 # ── Safe dynamic imports ─────────────────────────────────────────────────────
 
 def safe_import(module_name: str, function_name: str = "main"):
     """Try to import module.function or return None"""
     try:
-        spec = importlib.util.spec_from_file_location(
-            module_name,
-            str(Path(__file__).parent / f"{module_name}.py")
-        )
-        if spec is None:
-            return None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # Now we can just use the module name (no path needed)
+        module = __import__(module_name)
         return getattr(module, function_name, None)
-    except Exception:
+    except (ImportError, AttributeError) as e:
+        print(f"  Failed to import {module_name}.{function_name}  →  {e}")
         return None
 
 
+# Usage stays almost identical
 extract_main     = safe_import("data_extract_all_tickers", "extract_all_unique_tickers")
 download_main    = safe_import("data_batch_downloader",   "main")
 standardize_main = safe_import("data_standardize_parquets", "main")
